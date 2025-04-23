@@ -39,14 +39,14 @@ def generate_gds():
             return jsonify({"error": "User not found"}), 404
         
         # Check if the user has any remaining counter
-        if user['counter'] <= 0:
-            return jsonify({"error": "DRC "}), 400
+        # if user['counter'] <= 0:
+        #     return jsonify({"error": "DRC "}), 400
 
-        # Decrease the counter by 1
-        users_collection.update_one(
-            {"username": username}, 
-            {"$inc": {"counter": -1}}  # Decrement counter by 1
-        )
+        # # Decrease the counter by 1
+        # users_collection.update_one(
+        #     {"username": username}, 
+        #     {"$inc": {"counter": -1}}  # Decrement counter by 1
+        # )
 
         # Get the base directory of the app (root of your repo)
         app_base_dir = os.path.abspath(os.path.dirname(__file__))  # Get the absolute path of the current script
