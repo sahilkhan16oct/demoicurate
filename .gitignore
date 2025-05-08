@@ -1,5 +1,15 @@
+# Byte-compiled / optimized / DLL files
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
 
+# Virtual environment
+venv/
 
+# CodeGPT config
 .codegpt
+
+# VS Code settings (optional)
+.vscode/
+
+

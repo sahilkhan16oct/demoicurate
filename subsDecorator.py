@@ -1,39 +1,44 @@
-from flask_jwt_extended import get_jwt
+from flask_jwt_extended import get_jwt_identity
 from functools import wraps
 from datetime import datetime
 from flask import jsonify
+from pymongo import MongoClient
+import os
+
+# Set up MongoDB connection
+mongo_uri = f"mongodb+srv://innoveotech:{os.getenv('DB_PASSWORD')}@azeem.af86m.mongodb.net/chipdesign1?retryWrites=true&w=majority"
+client = MongoClient(mongo_uri)
+db = client['chipdesign1']
+users_collection = db['userstb']
 
 def subscription_required(subscription_type):
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
-            claims = get_jwt()
-            
-            # Access subscription details directly
-            subscription = claims.get(subscription_type, {})
-            print(f"Subscription details for {subscription_type}: {subscription}")
+            identity = get_jwt_identity()
+            if not identity:
+                return jsonify({"message": "Missing identity in token."}), 401
 
-            # Check if subscription is active
+            user = users_collection.find_one({"username": identity})
+            if not user:
+                return jsonify({"message": "User not found."}), 404
+
+            # Access nested subscription details
+            subscription = user.get("subscription", {}).get(subscription_type, {})
             if not subscription.get("active", False):
                 return jsonify({"message": f"Access denied. {subscription_type} subscription is required."}), 403
 
-            # Parse start and end dates
-            start_date_str = subscription.get("startDate")
-            end_date_str = subscription.get("endDate")
-            current_date = datetime.now()
+            start_date = subscription.get("startDate")
+            end_date = subscription.get("endDate")
+            current_date = datetime.utcnow()
 
-            # Check date range if start and end dates are provided
-            if start_date_str and end_date_str:
+            if start_date and end_date:
                 try:
-                    # Updated date parsing to match the JWT format
-                    start_date = datetime.strptime(start_date_str, '%a, %d %b %Y %H:%M:%S %Z')
-                    end_date = datetime.strptime(end_date_str, '%a, %d %b %Y %H:%M:%S %Z')
-                except ValueError:
+                    # MongoDB's $date fields are deserialized into datetime automatically
+                    if not (start_date <= current_date <= end_date):
+                        return jsonify({"message": f"Your {subscription_type} subscription has expired."}), 403
+                except Exception:
                     return jsonify({"message": "Invalid date format in subscription."}), 400
-
-                # Validate if current date is within the subscription period
-                if not (start_date <= current_date <= end_date):
-                    return jsonify({"message": f"Your {subscription_type} subscription has expired."}), 403
 
             return func(*args, **kwargs)
         return wrapper

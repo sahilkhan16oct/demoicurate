@@ -1,6 +1,6 @@
 import time
 from datetime import datetime, timedelta
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, jsonify, request, make_response
 from pymongo import MongoClient
 from werkzeug.security import generate_password_hash, check_password_hash
 import os
@@ -9,7 +9,7 @@ import random
 import smtplib
 from email.mime.text import MIMEText
 from functools import wraps
-from flask_jwt_extended import create_access_token, jwt_required , get_jwt , decode_token
+from flask_jwt_extended import create_access_token, get_jwt ,create_refresh_token,jwt_required,get_jwt_identity,set_refresh_cookies
 import shutil
 
 
@@ -19,8 +19,8 @@ load_dotenv()
 mongo_uri = f"mongodb+srv://innoveotech:{os.getenv('DB_PASSWORD')}@azeem.af86m.mongodb.net/chipdesign1?retryWrites=true&w=majority"
 client = MongoClient(mongo_uri)
 db = client['chipdesign1']
-users_collection = db['users']
-layermap_collection = db["layermap"]
+users_collection = db['userstb']
+# layermap_collection = db["layermap"]
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -144,16 +144,12 @@ def signup():
     start_date = datetime.now()
     end_date = start_date + timedelta(days=28)
 
-    
-
     # Insert user into the database
     users_collection.insert_one({
         "username": username,
         "email": email,
         "password": hashed_password,
         "is_verified": True,
-        "counter":20,
-        "occupation": "student",
         "subscription": {
             "prelimlef": {
                 "active": False,
@@ -179,11 +175,11 @@ def signup():
     shutil.copyfile(BASE_LAYERS_FILE, new_layermap_file)
 
     # Insert the layermap entry into the `layermap` collection
-    layermap_collection.insert_one({
-        "username": username,
-        "layermap_url": new_layermap_file,
+    # layermap_collection.insert_one({
+    #     "username": username,
+    #     "layermap_url": new_layermap_file,
         
-    })
+    # })
 
     # Generate and send OTP
     # otp = generate_otp()
@@ -192,53 +188,111 @@ def signup():
 
     return jsonify({"message": "User created successfully, OTP sent to email"}), 201
 
+from flask import request, jsonify
+from flask_jwt_extended import create_access_token, create_refresh_token
+from werkzeug.security import check_password_hash
+from datetime import datetime
+
 @auth_bp.route('/login', methods=['POST'])
 def login():
     data = request.json
     username = data.get('username')
     password = data.get('password')
+    device_id = data.get('device_id')  # Required
+    device_name = data.get('device_name', 'Unknown Device')  # Optional
+
+    if not device_id:
+        return jsonify({"message": "device_id is required"}), 400
 
     user = users_collection.find_one({"username": username})
 
     if user and check_password_hash(user['password'], password):
-        # if not user.get('is_verified'):
-        #     return jsonify({"message": "Account not verified. Please verify your email."}), 403
+        if not user.get('is_verified'):
+            return jsonify({"message": "Account not verified. Please verify your email."}), 403
 
-        # # Har subscription ka status aur dates nikaalna
-        # subscription = user.get("subscription", {})
-       
-        # # Simplify JWT claims structure
-        # subscriptions_claims = {
-        #     "username": username,
-        #     "prelimlef": {
-        #         "active": subscription.get("prelimlef", {}).get("active", False),
-        #         "startDate": subscription.get("prelimlef", {}).get("startDate", ""),
-        #         "endDate": subscription.get("prelimlef", {}).get("endDate", "")
-        #     },
-        #     "icurate": {
-        #         "active": subscription.get("icurate", {}).get("active", False),
-        #         "startDate": subscription.get("icurate", {}).get("startDate", ""),
-        #         "endDate": subscription.get("icurate", {}).get("endDate", "")
-        #     },
-        #     "mentorme": {
-        #         "active": subscription.get("mentorme", {}).get("active", False),
-        #         "startDate": subscription.get("mentorme", {}).get("startDate", ""),
-        #         "endDate": subscription.get("mentorme", {}).get("endDate", "")
-        #     },
-            
-        # }
+        # Initialize devices if not present
+        if 'devices' not in user:
+            user['devices'] = []
 
-        # Create JWT token with additional claims
-        # access_token = create_access_token(identity=username, additional_claims=subscriptions_claims)
+        # Check if device already exists
+        existing_device = next((d for d in user['devices'] if d['device_id'] == device_id), None)
+
+        if not existing_device and len(user['devices']) >= 3:
+            return jsonify({"message": "Maximum number of devices reached. Please logout from another device."}), 403
+
+        # Create tokens
         access_token = create_access_token(identity=username)
-        return jsonify(access_token=access_token, message="Login successful"), 200
-    else:
-        return jsonify({"message": "Invalid credentials"}), 401
+        refresh_token = create_refresh_token(identity=username)
+
+        device_entry = {
+            "device_id": device_id,
+            "refresh_token": refresh_token,
+            "device_name": device_name,
+            "last_used": datetime.utcnow()
+        }
+
+        # Update or insert device
+        if existing_device:
+            users_collection.update_one(
+                {"_id": user["_id"], "devices.device_id": device_id},
+                {"$set": {
+                    "devices.$.refresh_token": refresh_token,
+                    "devices.$.device_name": device_name,
+                    "devices.$.last_used": datetime.utcnow()
+                }}
+            )
+        else:
+            users_collection.update_one(
+                {"_id": user["_id"]},
+                {"$push": {"devices": device_entry}}
+            )
+
+        response = jsonify({
+            "access_token": access_token,
+            "message": "Login successful"
+        })
+        set_refresh_cookies(response, refresh_token)
+        return response
+
+    return jsonify({"message": "Invalid credentials"}), 401
 
 
-@auth_bp.route('/generate-layermap', methods=['POST'])
+@auth_bp.route('/refresh', methods=['POST'])
+@jwt_required(refresh=True,locations=["cookies"])  
+def refresh():
+    current_user = get_jwt_identity()  # username from refresh token
+
+    # Get fresh user data
+    user = users_collection.find_one({"username": current_user})
+
+    if not user:
+        return jsonify({"message": "User not found"}), 404
+
+    access_token = create_access_token(identity=current_user)
+    
+    response = jsonify(access_token=access_token)
+    return response
+
+@auth_bp.route('/subscription-status', methods=['GET'])
 @jwt_required()
-def generate_layermap():
+def subscription_status():
+    current_user = get_jwt_identity()
+    user = users_collection.find_one({"username": current_user})
+    
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    subscription = user.get("subscription", {})
+    
+    return jsonify({
+        "prelimlef": subscription.get("prelimlef", {}),
+        "icurate": subscription.get("icurate", {}),
+        "mentorme": subscription.get("mentorme", {})
+    }), 200
+
+# @auth_bp.route('/generate-layermap', methods=['POST'])
+# @jwt_required()
+# def generate_layermap():
     # Retrieve authenticated user's username from JWT claims
     jwt_claims = get_jwt()
     username = jwt_claims.get('username')
@@ -266,8 +320,8 @@ def generate_layermap():
         
 
 
-@auth_bp.route('/redirect', methods=['POST'])
-def auth_user():
+# @auth_bp.route('/redirect', methods=['POST'])
+# def auth_user():
     data = request.get_json()
     email = data.get('can_id')
 
@@ -312,47 +366,41 @@ def auth_user():
 
 
 
-@auth_bp.route('/verify-token', methods=['GET'])
-def verify_token():
-    token = request.headers.get('Authorization').replace('Bearer ', '')
+# @auth_bp.route('/verify-token', methods=['GET'])
+# def verify_token():
+#     token = request.headers.get('Authorization').replace('Bearer ', '')
 
-    if not token:
-        return jsonify({"error": "Token is required"}), 400
+#     if not token:
+#         return jsonify({"error": "Token is required"}), 400
 
-    try:
-        decoded_token = decode_token(token)
-        identity = decoded_token.get('sub')
+#     try:
+#         decoded_token = decode_token(token)
+#         identity = decoded_token.get('sub')
 
-        # Validate user in the database
-        user = users_collection.find_one({"username": identity})
-        if not user:
-            return jsonify({"error": "Invalid token or user does not exist"}), 401
+#         # Validate user in the database
+#         user = users_collection.find_one({"username": identity})
+#         if not user:
+#             return jsonify({"error": "Invalid token or user does not exist"}), 401
 
-        return jsonify({"message": "Token is valid", "username": identity}), 200
+#         return jsonify({"message": "Token is valid", "username": identity}), 200
 
-    except Exception as e:
-        return jsonify({"error": "Invalid or expired token", "details": str(e)}), 401
+#     except Exception as e:
+#         return jsonify({"error": "Invalid or expired token", "details": str(e)}), 401
 
 
-users = {
-    "alice": "12345",
-    "bob": "12345",
-    "charlie": "12345"
-}
 
-@auth_bp.route('/demologin', methods=['POST'])
-def demologin():
-    data = request.get_json()
-    username = data.get("username")
-    password = data.get("password")
+#     data = request.get_json()
+#     username = data.get("username")
+#     password = data.get("password")
 
-    if not username or not password:
-        return jsonify(message="Missing username or password"), 400
+#     if not username or not password:
+#         return jsonify(message="Missing username or password"), 400
 
-    # Check if the user exists and password matches
-    if username in users and users[username] == password:
-        access_token = create_access_token(identity=username)
-        return jsonify(access_token=access_token, message="Login successful"), 200
-    else:
-        return jsonify(message="Invalid credentials"), 401
+#     # Check if the user exists and password matches
+#     if username in users and users[username] == password:
+#         access_token = create_access_token(identity=username)
+#         return jsonify(access_token=access_token, message="Login successful"), 200
+#     else:
+#         return jsonify(message="Invalid credentials"), 401
+
 

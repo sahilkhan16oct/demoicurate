@@ -15,13 +15,16 @@ from datetime import timedelta
 
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for your frontend origin
+CORS(app, supports_credentials=True, origins=["http://localhost:3000"])
 
 system = platform.system()
 
 app.secret_key = 'your_secret_key'
 app.config["JWT_SECRET_KEY"] = "your_jwt_secret_key" 
-app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(days=1)
+app.config["JWT_TOKEN_LOCATION"] = ["headers", "cookies"]
+app.config["JWT_COOKIE_CSRF_PROTECT"] = True
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(minutes=15)
+app.config['JWT_REFRESH_TOKEN_EXPIRES'] = timedelta(days=1)
 jwt = JWTManager(app)  
 
 @app.route('/', methods=['GET'])
