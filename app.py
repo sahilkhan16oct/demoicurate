@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request, send_file 
+from flask import Flask, jsonify, request, send_file , send_from_directory
 from flask_cors import CORS
 import json
 import os
@@ -14,8 +14,9 @@ from flask_jwt_extended import JWTManager
 from datetime import timedelta
 
 
-app = Flask(__name__)
-CORS(app, supports_credentials=True, origins=["http://localhost:3000"])
+app = Flask(__name__,static_folder='build', static_url_path='')
+CORS(app, supports_credentials=True, resources={r"/*": {"origins": "*"}})
+
 
 system = platform.system()
 
@@ -27,9 +28,18 @@ app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(minutes=15)
 app.config['JWT_REFRESH_TOKEN_EXPIRES'] = timedelta(days=1)
 jwt = JWTManager(app)  
 
-@app.route('/', methods=['GET'])
-def home():
-    return jsonify({"message": "Yes, this site is working"})
+@app.route('/')
+def serve_react():
+    return send_from_directory(app.static_folder, 'index.html')
+
+# To serve static files like JS, CSS, etc.
+@app.route('/<path:path>')
+def serve_static_file(path):
+    file_path = os.path.join(app.static_folder, path)
+    if os.path.exists(file_path):
+        return send_from_directory(app.static_folder, path)
+    else:
+        return send_from_directory(app.static_folder, 'index.html')
 
 
 # authentication url

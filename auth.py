@@ -11,6 +11,7 @@ from email.mime.text import MIMEText
 from functools import wraps
 from flask_jwt_extended import create_access_token, get_jwt ,create_refresh_token,jwt_required,get_jwt_identity,set_refresh_cookies
 import shutil
+import jwt
 
 
 load_dotenv()
@@ -365,42 +366,101 @@ def subscription_status():
     return jsonify(access_token=access_token, message="Registration successful"), 201
 
 
+from bson.objectid import ObjectId
+from datetime import datetime
 
-# @auth_bp.route('/verify-token', methods=['GET'])
-# def verify_token():
-#     token = request.headers.get('Authorization').replace('Bearer ', '')
+def is_device_valid(username, device_id):
+    user = users_collection.find_one({"username": username})
+    if not user or "devices" not in user:
+        return False
 
-#     if not token:
-#         return jsonify({"error": "Token is required"}), 400
-
-#     try:
-#         decoded_token = decode_token(token)
-#         identity = decoded_token.get('sub')
-
-#         # Validate user in the database
-#         user = users_collection.find_one({"username": identity})
-#         if not user:
-#             return jsonify({"error": "Invalid token or user does not exist"}), 401
-
-#         return jsonify({"message": "Token is valid", "username": identity}), 200
-
-#     except Exception as e:
-#         return jsonify({"error": "Invalid or expired token", "details": str(e)}), 401
+    for device in user.get("devices", []):
+        if device.get("device_id") == device_id:
+            return True
+    return False
 
 
+def is_subscription_active(username, app_name):
+    user = users_collection.find_one({"username": username})
+    if not user or "subscription" not in user:
+        return False
 
-#     data = request.get_json()
-#     username = data.get("username")
-#     password = data.get("password")
+    app_sub = user["subscription"].get(app_name.lower())
+    if not app_sub or not app_sub.get("active"):
+        return False
 
-#     if not username or not password:
-#         return jsonify(message="Missing username or password"), 400
+    # Check date validity
+    now = datetime.utcnow()
 
-#     # Check if the user exists and password matches
-#     if username in users and users[username] == password:
-#         access_token = create_access_token(identity=username)
-#         return jsonify(access_token=access_token, message="Login successful"), 200
-#     else:
-#         return jsonify(message="Invalid credentials"), 401
+    start_date = app_sub.get("startDate")
+    end_date = app_sub.get("endDate")
+
+    if not start_date or not end_date:
+        return False
+
+    if isinstance(start_date, dict) and "$date" in start_date:
+        start_date = datetime.fromisoformat(start_date["$date"].replace("Z", "+00:00"))
+
+    if isinstance(end_date, dict) and "$date" in end_date:
+        end_date = datetime.fromisoformat(end_date["$date"].replace("Z", "+00:00"))
+
+    return start_date <= now <= end_date
 
 
+@auth_bp.route('/generate-app-token', methods=['POST'])
+@jwt_required()
+def generate_app_token():
+    current_user = get_jwt_identity()
+    data = request.json
+    device_id = data.get("device_id")
+    app_name = data.get("app")
+
+    if not (device_id and app_name):
+        return jsonify({"msg": "Missing device_id or app name"}), 400
+
+    if not is_device_valid(current_user, device_id):
+        return jsonify({"msg": "Invalid device"}), 403
+
+    if not is_subscription_active(current_user, app_name):
+        return jsonify({"msg": "Subscription inactive or invalid"}), 403
+
+    additional_claims = {
+        "app": app_name,
+        "device_id": device_id
+    }
+
+    token = create_access_token(identity=current_user, additional_claims=additional_claims, expires_delta=timedelta(seconds=5))
+    return jsonify({"token": token})
+
+
+@auth_bp.route('/verify-token', methods=['POST'])
+def verify_token():
+    data = request.json
+    token = data.get("token")
+    if not token:
+        return jsonify({"msg": "Token missing"}), 400
+    
+    try:
+        # Decode token manually to verify it (without signature verification if you want, but better to verify)
+        payload = jwt.decode(token, "your_jwt_secret_key", algorithms=["HS256"])
+        
+        # If decode succeeds, generate new tokens
+        identity = payload.get("sub")
+        app_name = payload.get("app")
+        device_id = payload.get("device_id")
+
+        # You can add additional checks here (e.g. check user exists, app/device valid, etc.)
+
+        access_token = create_access_token(identity=identity)
+        refresh_token = create_refresh_token(identity=identity)
+
+        return jsonify({
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "msg": "Token verified successfully",
+            "identity": identity
+        })
+    except jwt.ExpiredSignatureError:
+        return jsonify({"msg": "Token expired"}), 401
+    except jwt.InvalidTokenError:
+        return jsonify({"msg": "Invalid token"}), 401
