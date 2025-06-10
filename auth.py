@@ -439,17 +439,10 @@ def verify_token():
     token = data.get("token")
     if not token:
         return jsonify({"msg": "Token missing"}), 400
-    
-    try:
-        # Decode token manually to verify it (without signature verification if you want, but better to verify)
-        payload = jwt.decode(token, "your_jwt_secret_key", algorithms=["HS256"])
-        
-        # If decode succeeds, generate new tokens
-        identity = payload.get("sub")
-        app_name = payload.get("app")
-        device_id = payload.get("device_id")
 
-        # You can add additional checks here (e.g. check user exists, app/device valid, etc.)
+    try:
+        payload = jwt.decode(token, "meraSuperSecretKey123", algorithms=["HS256"])
+        identity = payload.get("sub")  # Corrected key
 
         access_token = create_access_token(identity=identity)
         refresh_token = create_refresh_token(identity=identity)
@@ -457,10 +450,57 @@ def verify_token():
         return jsonify({
             "access_token": access_token,
             "refresh_token": refresh_token,
-            "msg": "Token verified successfully",
-            "identity": identity
+            "msg": "Token verified successfully"
         })
     except jwt.ExpiredSignatureError:
         return jsonify({"msg": "Token expired"}), 401
-    except jwt.InvalidTokenError:
-        return jsonify({"msg": "Invalid token"}), 401
+    except jwt.InvalidTokenError as e:
+        return jsonify({"msg": f"Invalid token: {str(e)}"}), 401
+
+
+from flask_jwt_extended import jwt_required, get_jwt_identity
+
+@auth_bp.route('/generate', methods=['POST'])
+@jwt_required()
+def generatenew():
+    # old_identity = get_jwt_identity()  # We will NOT use this
+    data = request.get_json()
+    username = data.get('candidateId')
+    print("Incoming candidateId:", username)
+
+    if not username:
+        return jsonify({"error": "candidateId is required"}), 400
+
+    # Fresh check in DB (does not rely on old token identity)
+    user = users_collection.find_one({"username": username})
+
+    if user:
+        access_token = create_access_token(identity=username, expires_delta=timedelta(seconds=8))
+        refresh_token = create_refresh_token(identity=username)
+        print("Fresh token generated:", access_token)
+        return jsonify(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            message="Login successful with fresh token"
+        ), 200
+
+    # Register new user
+    new_user = { "username": username }
+    users_collection.insert_one(new_user)
+
+    new_layermap_file = f"{LAYERS_DIR}/{username}_layermap.json"
+    try:
+        shutil.copyfile(BASE_LAYERS_FILE, new_layermap_file)
+    except FileNotFoundError as e:
+        return jsonify({"error": f"Base layermap file not found: {e}"}), 500
+
+    # Generate fresh token
+    access_token = create_access_token(identity=username, expires_delta=timedelta(seconds=8))
+    refresh_token = create_refresh_token(identity=username)
+    print("Fresh token generated (new user):", access_token)
+
+    return jsonify(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        message="Registration successful with fresh token"
+    ), 201
