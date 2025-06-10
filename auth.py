@@ -475,7 +475,7 @@ def generatenew():
     user = users_collection.find_one({"username": username})
 
     if user:
-        access_token = create_access_token(identity=username, expires_delta=timedelta(seconds=8))
+        access_token = create_access_token(identity=username, expires_delta=timedelta(seconds=15))
         refresh_token = create_refresh_token(identity=username)
         print("Fresh token generated:", access_token)
         return jsonify(
@@ -495,7 +495,7 @@ def generatenew():
         return jsonify({"error": f"Base layermap file not found: {e}"}), 500
 
     # Generate fresh token
-    access_token = create_access_token(identity=username, expires_delta=timedelta(seconds=8))
+    access_token = create_access_token(identity=username, expires_delta=timedelta(seconds=15))
     refresh_token = create_refresh_token(identity=username)
     print("Fresh token generated (new user):", access_token)
 
