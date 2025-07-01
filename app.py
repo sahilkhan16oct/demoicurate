@@ -3,7 +3,7 @@ from flask_cors import CORS
 import json
 import os
 from jsonToGds import convert_json_to_gds 
-from gdsToJson import convert_gds_to_json
+from gdsToJson_optimized_azeem import convert_gds_to_json
 import platform
 from io import BytesIO
 import tempfile
@@ -211,6 +211,34 @@ def convert_gds_to_json_route():
         return jsonify({'message': str(e)}), 500
 
 
+UPLOAD_FOLDER = 'uploads'
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+@app.route('/upload-gds-instance', methods=['POST'])
+def upload_gds():
+    try:
+        if 'file' not in request.files:
+            return jsonify({"error": "No file part in the request"}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({"error": "No selected file"}), 400
+
+        file_path = os.path.join(UPLOAD_FOLDER, file.filename)
+        file.save(file_path)
+
+        json_data = convert_gds_to_json(file_path)
+
+        # Optional: delete the temp file after parsing
+        # os.remove(file_path)
+
+        return jsonify({
+            "message": "Parsed successfully",
+            "data": json_data
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == '__main__':
