@@ -241,5 +241,47 @@ def upload_gds():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/convert-json-to-gds', methods=['POST'])
+def convert_json_to_gds_route():
+    try:
+        if 'file' not in request.files:
+            return jsonify({"error": "Missing file"}), 400
+
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({"error": "Empty filename"}), 400
+
+        contents = file.read()
+        wrapper = json.loads(contents.decode('utf-8'))
+
+        layout_data = wrapper.get("data", {}).get("layout_data")
+        if not layout_data:
+            return jsonify({"error": "Missing layout_data"}), 400
+
+        cells = layout_data.get("cells", [])
+        if not cells or not isinstance(cells, list):
+            return jsonify({"error": "Invalid cells format"}), 400
+
+        # Use temp file for output
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".gds") as tmp_output:
+            output_path = tmp_output.name
+
+        convert_json_to_gds(cells, output_path)
+
+        return send_file(
+            output_path,
+            mimetype="application/octet-stream",
+            as_attachment=True,
+            download_name="layout.gds"
+        )
+
+    except Exception as e:
+        print("❌ Exception :", e)
+        return jsonify({"error": str(e)}), 500
+
+    finally:
+        # Optional: you could remove the output file if you’re not using NamedTemporaryFile with delete=True
+        pass
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0',port=8000)       
