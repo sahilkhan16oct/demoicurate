@@ -259,7 +259,7 @@ def login():
 
 
 @auth_bp.route('/refresh', methods=['POST'])
-@jwt_required(refresh=True,locations=["cookies"])  
+@jwt_required(refresh=True)  
 def refresh():
     current_user = get_jwt_identity()  # username from refresh token
 
@@ -447,23 +447,26 @@ def verify_token():
         access_token = create_access_token(identity=identity)
         refresh_token = create_refresh_token(identity=identity)
 
-        return jsonify({
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "msg": "Token verified successfully"
-        })
+        resp = make_response(jsonify({"access_token": access_token}))
+        set_refresh_cookies(resp, refresh_token)
+        resp.set_cookie(
+            'refresh_token',
+            value=refresh_token,
+            httponly=True,         # 🔐 Prevent JS access
+            secure=True,           # 🔐 Send over HTTPS only (not in dev)
+            samesite='Strict',     # 🔐 Or 'Lax' if you need cross-site login
+            path='/auth/refresh'
+        )
+        return resp
     except jwt.ExpiredSignatureError:
         return jsonify({"msg": "Token expired"}), 401
     except jwt.InvalidTokenError as e:
         return jsonify({"msg": f"Invalid token: {str(e)}"}), 401
 
 
-from flask_jwt_extended import jwt_required, get_jwt_identity
-
 @auth_bp.route('/generate', methods=['POST'])
-@jwt_required()
+@jwt_required()     
 def generatenew():
-    # old_identity = get_jwt_identity()  # We will NOT use this
     data = request.get_json()
     username = data.get('candidateId')
     print("Incoming candidateId:", username)
@@ -475,16 +478,15 @@ def generatenew():
     user = users_collection.find_one({"username": username})
 
     if user:
-        access_token = create_access_token(identity=username, expires_delta=timedelta(seconds=15))
-        refresh_token = create_refresh_token(identity=username)
+        access_token = create_access_token(identity=username, expires_delta=timedelta(seconds=7))
         print("Fresh token generated:", access_token)
         return jsonify(
             access_token=access_token,
-            refresh_token=refresh_token,
             message="Login successful with fresh token"
         ), 200
 
     # Register new user
+    print("new user")
     new_user = { "username": username }
     users_collection.insert_one(new_user)
 
@@ -494,13 +496,9 @@ def generatenew():
     except FileNotFoundError as e:
         return jsonify({"error": f"Base layermap file not found: {e}"}), 500
 
-    # Generate fresh token
     access_token = create_access_token(identity=username, expires_delta=timedelta(seconds=15))
-    refresh_token = create_refresh_token(identity=username)
-    print("Fresh token generated (new user):", access_token)
 
     return jsonify(
         access_token=access_token,
-        refresh_token=refresh_token,
-        message="Registration successful with fresh token"
+        message="Registration successful"
     ), 201
